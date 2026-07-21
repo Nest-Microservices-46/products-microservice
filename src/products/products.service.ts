@@ -61,4 +61,14 @@ export class ProductsService {
     //return await this.prisma.product.delete({ where: { id } });
     return await this.prisma.product.update({ where: { id }, data: { available: false } });
   }
+  async validateProductsExists(ids: number[]) {
+
+    ids = Array.from(new Set(ids));
+
+    const products = await this.prisma.product.findMany({ where: { id: { in: ids } } });
+    if (products.length !== ids.length) {
+      throw new RpcException({ message: 'Products not found', statusCode: HttpStatus.BAD_REQUEST });
+    }
+    return products;
+  }
 }

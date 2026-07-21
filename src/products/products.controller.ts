@@ -1,4 +1,4 @@
-import { Controller, Body, Param, Query, ParseIntPipe } from '@nestjs/common';
+import { Controller, Body, Param, Query, ParseIntPipe, BadRequestException } from '@nestjs/common';
 import { ProductsService } from './products.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
@@ -37,5 +37,14 @@ export class ProductsController {
   @MessagePattern({ cmd: 'remove_product' })
   remove(@Payload('id', ParseIntPipe) id: number) {
     return this.productsService.remove(id);
+  }
+
+  @MessagePattern({ cmd: 'validate_products_exists' })
+  validateProductsExists(@Payload() ids: number[]) {
+    const products = this.productsService.validateProductsExists(ids);
+    if (!products) {
+      throw new BadRequestException(`Products with ids ${ids} not found`);
+    }
+    return products;
   }
 }
