@@ -1,6 +1,9 @@
-allowBuilds:
-  '@nestjs/core': true
-  '@prisma/engines': true
-  better-sqlite3: true
-  prisma: true
-  unrs-resolver: true
+# pnpm 10 bloquea los postinstall por defecto. La clave que lee es
+# `onlyBuiltDependencies` (una lista); `allowBuilds` no existe y se ignoraba en silencio,
+# por eso better-sqlite3 quedaba sin compilar su binding nativo.
+onlyBuiltDependencies:
+  - '@nestjs/core'
+  - '@prisma/engines'
+  - better-sqlite3
+  - prisma
+  - unrs-resolver
