@@ -1,0 +1,86 @@
+# Imagen de producción de products-ms. Es la más particular de las cinco:
+#
+# - pnpm por corepack, como client-gateway.
+# - better-sqlite3 es nativo y no publica prebuilds para musl, así que en Alpine hay
+#   que compilarlo (python3/make/g++). Esas herramientas quedan en las etapas
+#   intermedias, nunca en la final.
+# - pnpm 10 no corre postinstall salvo que el paquete esté en `onlyBuiltDependencies`
+#   de pnpm-workspace.yaml, por eso ese archivo se copia junto a los manifiestos. Sin
+#   él better-sqlite3 queda sin binding y falla recién en la primera query.
+# - El generador es `prisma-client` con `output = ../generated/prisma`, o sea el
+#   cliente son .ts que tsc compila dentro de dist/. No hay .prisma que copiar, pero
+#   `prisma generate` tiene que correr ANTES del build.
+
+# ---------- deps ----------
+FROM node:22-alpine AS deps
+
+RUN apk add --no-cache python3 make g++
+
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN corepack enable && corepack prepare pnpm@10.32.1 --activate
+
+WORKDIR /usr/src/app
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+
+RUN pnpm install --frozen-lockfile
+
+# ---------- build ----------
+FROM node:22-alpine AS build
+
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN corepack enable && corepack prepare pnpm@10.32.1 --activate
+
+WORKDIR /usr/src/app
+
+COPY --from=deps /usr/src/app/node_modules ./node_modules
+COPY . .
+
+# Antes del build: genera los .ts en generated/prisma que después tsc compila.
+RUN npx prisma generate
+RUN pnpm build
+
+# ---------- prod-deps ----------
+FROM node:22-alpine AS prod-deps
+
+RUN apk add --no-cache python3 make g++
+
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN corepack enable && corepack prepare pnpm@10.32.1 --activate
+
+WORKDIR /usr/src/app
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+
+# `--prod` tampoco saca el CLI: @prisma/client lo declara como optional peer. Con
+# pnpm los paquetes viven en .pnpm/<nombre>@<version>_<hash>, así que se borran por
+# glob. El query compiler WASM del cliente generado no está acá — vive en dist/.
+RUN pnpm install --frozen-lockfile --prod \
+    && rm -rf node_modules/.pnpm/prisma@* \
+              node_modules/.pnpm/@prisma+studio-core@* \
+              node_modules/.pnpm/@prisma+dev@* \
+              node_modules/.pnpm/@prisma+engines@* \
+              node_modules/.pnpm/@prisma+fetch-engine@* \
+              node_modules/.pnpm/@electric-sql+* \
+              node_modules/.pnpm/effect@* \
+              node_modules/.pnpm/typescript@*
+
+# ---------- final ----------
+FROM node:22-alpine
+
+WORKDIR /usr/src/app
+
+ENV NODE_ENV=production
+
+COPY --from=prod-deps /usr/src/app/node_modules ./node_modules
+COPY --from=build /usr/src/app/dist ./dist
+COPY package.json ./
+# DATABASE_URL=file:./dev.db apunta acá. Sigue viviendo dentro de la imagen: las
+# escrituras se pierden en cada rebuild, igual que en desarrollo. Necesita un volumen.
+COPY --from=build /usr/src/app/dev.db ./dev.db
+
+EXPOSE 3000
+
+# El entry queda en dist/src/, no en dist/: prisma.config.ts y generated/ viven
+# fuera de src, así que tsc sube el rootDir a la raíz y replica el arbol.
+CMD ["node", "dist/src/main.js"]
